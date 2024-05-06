@@ -1,0 +1,29 @@
+{
+  "framework": "odin-http",
+  "tests": [
+    {
+      "default": {
+        "json_url": "/json",
+        "plaintext_url": "/plaintext",
+        "db_url": "/db",
+        "query_url": "/queries?queries=",
+        "fortune_url": "/fortunes",
+        "port": 8080,
+        "approach": "Realistic",
+        "classification": "Micro",
+        "database": "Postgres",
+        "framework": "Odin HTTP",
+        "language": "Odin",
+        "flavor": "None",
+        "orm": "Raw",
+        "platform": "Odin HTTP",
+        "webserver": "None",
+        "os": "Linux",
+        "database_os": "Linux",
+        "display_name": "Odin HTTP",
+        "notes": "",
+        "versus": "None"
+      }
+    }
+  ]
+}
