@@ -1,7 +1,5 @@
 package main
 
-// import "core:bytes"
-import      "base:runtime"
 import intr "base:intrinsics"
 
 import      "core:bytes"
@@ -55,6 +53,8 @@ main :: proc() {
 
 	http.route_get(&r, "/fortunes", http.handler(fortunes))
 
+	http.route_get(&r, "/updates", http.handler(updates))
+
 	fmt.println("Listening on port 8080")
 
 	s: http.Server
@@ -80,8 +80,15 @@ Queries_Work :: struct {
 	done: ^int,
 }
 
-World_Update_Work :: struct {}
-World_Do_Update_Work :: struct {}
+World_Update_Work :: struct {
+	rows: ^[]World,
+	done: ^int,
+	retrieved: ^int,
+}
+World_Do_Update_Work :: struct {
+	i: int,
+	update: World_Update_Work,
+}
 
 Work :: struct {
 	res: ^http.Response,
@@ -104,7 +111,7 @@ ensure_line :: #force_inline proc() {
 
 	// "tfb-database"
 	// "127.0.0.1"
-	line.conn = pq.setdb_login("127.0.0.1", dbname="hello_world", login="benchmarkdbuser", pwd="benchmarkdbpass")
+	line.conn = pq.setdb_login("tfb-database", dbname="hello_world", login="benchmarkdbuser", pwd="benchmarkdbpass")
 	if pq.status(line.conn) != .Ok do log.panic(pq.error_message(line.conn))
 
 	assert(pq.prepare(line.conn, "world", "SELECT id, randomNumber FROM World WHERE id = $1", 1, nil) != nil)
@@ -127,9 +134,8 @@ ensure_line :: #force_inline proc() {
 	// })
 
 	tick :: proc(_: rawptr) {
-		// TODO: unfuck this
-		context = runtime.default_context()
-		context.logger = logger
+		// context = runtime.default_context()
+		// context.logger = logger
 
 		nbio.next_tick(&http.td.io, rawptr(nil), tick)
 
@@ -144,6 +150,23 @@ ensure_line :: #force_inline proc() {
 				#partial switch status := pq.result_status(pqres); status {
 				case: log.panicf("unexpected result status %v: %v: %v", status, pq.error_message(line.conn), pq.result_error_message(pqres))
 				case .Pipeline_Sync: break
+				case .Command_OK:
+					work := queue.pop_front(&line.dispatched)
+					context.temp_allocator = virtual.arena_allocator(&work.res._conn.temp_allocator)
+
+					switch wd in work.data {
+					case World_Do_Update_Work:
+						wd.update.done^ += 1
+						if wd.update.done^ == len(wd.update.rows) {
+							log.debugf("[%i] sending response", work.res._conn.socket)
+							http.headers_set_unsafe(&work.res.headers, "server", "Odin HTTP")
+							assert(http.respond_json(work.res, wd.update.rows^) == nil)
+						}
+
+					case Queries_Work, World_Work, World_Update_Work, Fortunes_Work:
+						unreachable()
+					}
+
 				case .Tuples_OK:
 					work := queue.pop_front(&line.dispatched)
 					context.temp_allocator = virtual.arena_allocator(&work.res._conn.temp_allocator)
@@ -185,9 +208,28 @@ ensure_line :: #force_inline proc() {
 							http.headers_set_unsafe(&work.res.headers, "server", "Odin HTTP")
 							assert(http.respond_json(work.res, wd.rows^) == nil)
 						}
+
 					case World_Update_Work:
-						// TODO:
-						unimplemented()
+						w := &wd.rows[wd.retrieved^]
+						wd.retrieved^ += 1
+
+						wid := pq.get_value(pqres, 0, 0)
+						uwid, idok := strconv.parse_u64_of_base(string(wid[:pq.get_length(pqres, 0, 0)]), 10)
+						if wid == nil || !idok do log.panicf("parse id from result error: %s from result %q", pq.error_message(line.conn), wid)
+						w.id = i32(uwid)
+
+						wnum := pq.get_value(pqres, 0, 1)
+						uwnum, numok := strconv.parse_u64_of_base(string(wnum[:pq.get_length(pqres, 0, 1)]), 10)
+						if wnum == nil || !numok do log.panicf("parse number from result error: %s from result: %q", pq.error_message(line.conn), wnum)
+						w.randomNumber = i32(uwnum)
+
+						queue.push_back(&line.work, Work{
+							res  = work.res,
+							data = World_Do_Update_Work {
+								i      = wd.retrieved^-1,
+								update = wd,
+							},
+						})
 
 					case Fortunes_Work:
 						rows := make([dynamic]Fortune, context.temp_allocator)
@@ -255,18 +297,19 @@ ensure_line :: #force_inline proc() {
 				case Fortunes_Work:
 					assert(pq.send_query_prepared(line.conn, "fortunes", 0, nil, nil, nil, .Text) == true)
 				case World_Do_Update_Work:
-					unimplemented()
-					// id_buf: [6]byte
-					// strconv.append_uint(id_buf[:], u64(wd.id), 10)
-					//
-					// rand := rand.int31_max(10_000-1) + 1
-					// rand_buf: [6]byte
-					// strconv.append_uint(rand_buf[:], u64(rand), 10)
-					//
-					// params: [2][^]byte
-					// params[0] = &id_buf[0]
-					// params[1] = &rand_buf[0]
-					// assert(pq.send_query_prepared(line.conn, "world_update", 2, &params[0], nil, nil, .Text))
+					w := &wd.update.rows[wd.i]
+
+					id_buf: [6]byte
+					strconv.append_uint(id_buf[:], u64(w.id), 10)
+
+					w.randomNumber = rand.int31_max(10_000-1) + 1
+					rand_buf: [6]byte
+					strconv.append_uint(rand_buf[:], u64(w.randomNumber), 10)
+
+					params: [2][^]byte
+					params[0] = &id_buf[0]
+					params[1] = &rand_buf[0]
+					assert(pq.send_query_prepared(line.conn, "world_update", 2, &params[0], nil, nil, .Text) == true)
 				}
 
 				queue.pop_front(&line.work)
@@ -387,6 +430,25 @@ cached_queries :: proc(req: ^http.Request, res: ^http.Response) {
 
 updates :: proc(req: ^http.Request, res: ^http.Response) {
 	ensure_line()
-	
-	unimplemented()
+
+	n, _, _ := http.query_get_int(req.url, "queries", base=10)
+	n = clamp(n, 1, 500)
+
+	rows := new([]World, context.temp_allocator)
+	rows^ = make([]World, n, context.temp_allocator)
+	done := new(int, context.temp_allocator)
+	retrieved := new(int, context.temp_allocator)
+
+	// NOTE: this is dumb.
+	queue.reserve(&line.work, queue.len(line.work)+n)
+	for _ in 0..<n {
+		queue.push_back(&line.work, Work{
+			res = res,
+			data = World_Update_Work{
+				rows      = rows,
+				done      = done,
+				retrieved = retrieved,
+			},
+		})
+	}
 }

@@ -15,7 +15,7 @@ RUN git clone --depth=1 https://github.com/laytan/temple shared/temple
 
 RUN git clone --depth=1 https://github.com/laytan/back shared/back
 
-RUN git clone http://github.com/laytan/odin-http shared/http && git -C shared/http checkout d5c2a82
+RUN git clone http://github.com/laytan/odin-http shared/http
 
 WORKDIR /app
 
@@ -26,6 +26,7 @@ RUN odin run /odin/shared/temple/cli -- . /odin/shared/temple
 RUN odin build . -o:aggressive -microarch:native -no-bounds-check -no-type-assert -out:server
 # RUN odin build . -o:size -microarch:native -no-bounds-check -out:server
 # RUN odin build . -out:server -o:speed -disable-assert
+# RUN odin build . -debug -out:server -sanitize:address
 
 EXPOSE 8080
 
