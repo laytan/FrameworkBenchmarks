@@ -15,7 +15,7 @@ RUN git clone --depth=1 https://github.com/laytan/temple shared/temple
 
 RUN git clone --depth=1 https://github.com/laytan/back shared/back
 
-RUN git clone http://github.com/laytan/odin-http shared/http && git -C shared/http checkout 1596f992024030b5c52c9c64bec9a0496759a539
+RUN git clone http://github.com/laytan/odin-http shared/http && git -C shared/http checkout d5c2a82
 
 WORKDIR /app
 
